@@ -1,6 +1,6 @@
 # ============================================================================
 # INTIME TECHNOLOGY - GITHUB ACTIONS CI/CD: COMPILADOR AUTOMÁTICO ANDROID (.APK)
-# Custo Zero: Utiliza runners gratuitos ubuntu-latest, Java JDK 17 e Android SDK
+# Custo Zero: Utiliza runners gratuitos ubuntu-24.04 (com Android SDK pré-instalado)
 # Gera o instalador .APK pronto para download na aba Actions e em GitHub Releases
 # ============================================================================
 
@@ -15,17 +15,11 @@ on:
         required: true
         default: "https://os.intimetechnology.com.br"
         type: string
-      build_type:
-        description: "Tipo de Compilação do APK"
-        required: true
-        default: "debug"
-        type: choice
-        options:
-          - debug
-          - release
 
-  # Dispara automaticamente toda vez que uma tag de versão (ex: v1.0.0) for enviada
+  # Dispara automaticamente a cada push na branch main ou ao enviar uma tag (ex: v1.0.1)
   push:
+    branches:
+      - main
     tags:
       - "v*.*.*"
 
@@ -35,19 +29,21 @@ permissions:
 jobs:
   build-android-apk:
     name: "Compilar APK Android (Capacitor + JDK 17)"
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 30
 
     env:
       CAPACITOR_SERVER_URL: ${{ github.event.inputs.server_url || vars.CAPACITOR_SERVER_URL || 'https://os.intimetechnology.com.br' }}
       NEXT_PUBLIC_APP_URL: ${{ github.event.inputs.server_url || vars.CAPACITOR_SERVER_URL || 'https://os.intimetechnology.com.br' }}
+      ANDROID_HOME: /usr/local/lib/android/sdk
+      ANDROID_SDK_ROOT: /usr/local/lib/android/sdk
 
     steps:
       # 1. Checkout do Código-Fonte
       - name: "Checkout do Repositório InTime OS"
         uses: actions/checkout@v4
 
-      # 2. Configuração do Node.js 20 (Sem exigir package-lock.json prévio)
+      # 2. Configuração do Node.js 20
       - name: "Configurar Node.js 20"
         uses: actions/setup-node@v4
         with:
@@ -60,13 +56,24 @@ jobs:
           distribution: "temurin"
           java-version: "17"
 
-      # 4. Configuração do Android SDK Oficial
-      - name: "Configurar Android SDK Tools"
-        uses: android-actions/setup-android@v3
+      # 4. Aceitar Licenças do Android SDK Nativo do Runner (Sem depender de action de terceiros)
+      - name: "Validar Android SDK Nativo e Aceitar Licenças"
+        run: |
+          yes | $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager --licenses || true
 
-      # 5. Instalação de Dependências do Projeto + tsx (Necessário para ler capacitor.config.ts)
-      - name: "Instalar Dependências NPM"
-        run: npm install --legacy-peer-deps
+      # 5. Instalar apenas os pacotes Capacitor necessários para compilar o APK Android (Mais rápido e leve)
+      - name: "Instalar Pacotes Capacitor Android"
+        run: |
+          npm install --no-save \
+            @capacitor/core@^6.1.2 \
+            @capacitor/cli@^6.1.2 \
+            @capacitor/android@^6.1.2 \
+            @capacitor/app@^6.0.1 \
+            @capacitor/camera@^6.0.2 \
+            @capacitor/filesystem@^6.0.1 \
+            @capacitor/network@^6.0.1 \
+            @capacitor/preferences@^6.0.2 \
+            @capacitor-mlkit/barcode-scanning@^6.1.0
 
       # 6. Atualização Dinâmica da URL do Servidor no Mobile Shell e capacitor.config.json
       - name: "Injetar URL do Servidor InTime no Shell Mobile"
@@ -95,11 +102,11 @@ jobs:
         working-directory: ./android
         run: |
           chmod +x ./gradlew
-          ./gradlew assembleDebug
+          ./gradlew assembleDebug --no-daemon
 
           mkdir -p ../dist-apk
-          cp app/build/outputs/apk/debug/app-debug.apk ../dist-apk/InTime-OS-Mobile-${{ github.ref_name }}.apk
-          sha256sum ../dist-apk/InTime-OS-Mobile-${{ github.ref_name }}.apk > ../dist-apk/InTime-OS-Mobile-${{ github.ref_name }}.apk.sha256
+          cp app/build/outputs/apk/debug/app-debug.apk ../dist-apk/InTime-OS-Mobile.apk
+          sha256sum ../dist-apk/InTime-OS-Mobile.apk > ../dist-apk/InTime-OS-Mobile.apk.sha256
 
       # 9. Publicar o .APK na Aba "Actions" do GitHub (Disponível em qualquer execução)
       - name: "Upload do Instalador .APK nos Artefatos do GitHub Actions"
@@ -111,7 +118,7 @@ jobs:
             dist-apk/*.sha256
           retention-days: 90
 
-      # 10. Publicar automaticamente em "GitHub Releases" quando disparado por uma Tag (ex: v1.0.0)
+      # 10. Publicar automaticamente em "GitHub Releases" quando disparado por uma Tag (ex: v1.0.1)
       - name: "Publicar .APK na Aba Releases do GitHub"
         if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
