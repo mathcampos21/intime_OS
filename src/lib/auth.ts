@@ -87,9 +87,11 @@ export async function verifySessionToken(
  */
 export function setAuthCookie(token: string): void {
   const cookieStore = cookies();
+  const isHttps =
+    process.env.NEXT_PUBLIC_APP_URL?.startsWith("https://") ?? false;
   cookieStore.set(SESSION_COOKIE_NAME, token, {
     httpOnly: true,
-    secure: process.env.NODE_ENV === "production",
+    secure: isHttps,
     sameSite: "lax",
     path: "/",
     maxAge: TOKEN_EXPIRATION_SECONDS,

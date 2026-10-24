@@ -4,6 +4,7 @@ import { prisma } from "@/lib/prisma";
 import {
   clearAuthCookie,
   getAuthSession,
+  hashPassword,
   setAuthCookie,
   signSessionToken,
   verifyPassword,
@@ -17,8 +18,67 @@ const LoginRequestSchema = z.object({
   password: z.string().min(4, "Informe sua senha de acesso."),
 });
 
+/**
+ * Auto-Bootstrap (First-Boot Seed):
+ * Caso o banco de dados PostgreSQL acabe de ser criado no Docker/Portainer e
+ * ainda não possua nenhum usuário cadastrado (`COUNT(users) = 0`), cria
+ * automaticamente o Administrador Inicial e as Configurações da InTime Technology.
+ */
+async function ensureInitialAdminBootstrapped(): Promise<void> {
+  const userCount = await prisma.user.count();
+  if (userCount > 0) return;
+
+  const adminEmail = (
+    process.env.INITIAL_ADMIN_EMAIL || "admin@intimetechnology.com.br"
+  )
+    .toLowerCase()
+    .trim();
+  const adminPassword =
+    process.env.INITIAL_ADMIN_PASSWORD || "InTime@Admin2026";
+  const passwordHash = await hashPassword(adminPassword);
+
+  await prisma.companySettings.upsert({
+    where: { id: 1 },
+    update: {},
+    create: {
+      id: 1,
+      tradeName: DEFAULT_COMPANY_CONFIG.tradeName,
+      legalName: DEFAULT_COMPANY_CONFIG.legalName,
+      cnpj: DEFAULT_COMPANY_CONFIG.cnpj,
+      email: DEFAULT_COMPANY_CONFIG.email,
+      phone: DEFAULT_COMPANY_CONFIG.phone,
+      whatsapp: DEFAULT_COMPANY_CONFIG.whatsapp,
+      website: DEFAULT_COMPANY_CONFIG.website,
+      logoUrl: DEFAULT_COMPANY_CONFIG.logoUrl,
+      primaryColor: DEFAULT_COMPANY_CONFIG.theme.primary.DEFAULT,
+      secondaryColor: DEFAULT_COMPANY_CONFIG.theme.secondary.DEFAULT,
+      accentColor: DEFAULT_COMPANY_CONFIG.theme.accent.DEFAULT,
+      defaultWarrantyDays: DEFAULT_COMPANY_CONFIG.legal.defaultWarrantyDays,
+      defaultWarrantyTerms: DEFAULT_COMPANY_CONFIG.legal.defaultWarrantyTerms,
+      lgpdClauseText: DEFAULT_COMPANY_CONFIG.legal.lgpdClauseText,
+    },
+  });
+
+  await prisma.user.create({
+    data: {
+      name: "Administrador InTime Technology",
+      cpf: "000.000.000-01",
+      jobTitle: "Diretor Técnico / Admin",
+      professionalRegistry: "CFT/CREA-SP",
+      email: adminEmail,
+      passwordHash,
+      phone: DEFAULT_COMPANY_CONFIG.phone,
+      role: "ADMIN",
+      isActive: true,
+    },
+  });
+}
+
 export async function POST(req: NextRequest) {
   try {
+    // Garante que no primeiro boot do container o Admin Inicial exista no banco
+    await ensureInitialAdminBootstrapped();
+
     const body = await req.json();
     const parsed = LoginRequestSchema.safeParse(body);
 
