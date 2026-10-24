@@ -1,0 +1,23 @@
+{
+  "appId": "br.com.intimetechnology.os",
+  "appName": "InTime OS",
+  "webDir": "public/mobile-shell",
+  "bundledWebRuntime": false,
+  "server": {
+    "url": "https://os.intimetechnology.com.br",
+    "cleartext": false,
+    "androidScheme": "https",
+    "allowNavigation": [
+      "*.intimetechnology.com.br",
+      "os.intimetechnology.com.br",
+      "brasilapi.com.br",
+      "viacep.com.br"
+    ]
+  },
+  "android": {
+    "allowMixedContent": false,
+    "captureInput": true,
+    "webContentsDebuggingEnabled": false,
+    "backgroundColor": "#0F172A"
+  }
+}
