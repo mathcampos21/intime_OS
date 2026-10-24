@@ -1,0 +1,658 @@
+// ============================================================================
+// INTIME TECHNOLOGY - PRISMA DATABASE SCHEMA (POSTGRESQL 16)
+// Clean-Room Implementation com Compatibilidade 100% ao MapOS Legado
+// Empresa: In Time Technology e Systems LTDA (CNPJ: 10.742.889/0001-36)
+// ============================================================================
+
+generator client {
+  provider      = "prisma-client-js"
+  binaryTargets = ["native", "linux-musl-openssl-3.0.x"]
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ============================================================================
+// ENUMS DO DOMÍNIO
+// ============================================================================
+
+enum Role {
+  ADMIN           // Acesso total (Gestão, Configurações, Backup, Migração, Auditoria)
+  TECNICO_INTERNO // Bancada / Laboratório / Atendimento Interno
+  TECNICO_CAMPO   // Atendimento Externo / App Android / QR Scanner / Laudos em Campo
+}
+
+enum EquipmentStatus {
+  OPERACIONAL     // #10B981 (Verde Esmeralda) - Funcionando normalmente
+  EM_MANUTENCAO   // #F59E0B (Âmbar) - Em reparo / OS aberta
+  COM_RESTRICAO   // #F97316 (Laranja) - Operando parcialmente / requer atenção
+  DESATIVADO      // #EF4444 (Vermelho) - Baixado / Fora de operação / Sucata
+}
+
+enum ServiceOrderStatus {
+  ORCAMENTO         // Orçamento elaborado aguardando aprovação
+  ABERTA            // OS recém-aberta na fila de atendimento
+  EM_ANDAMENTO      // Técnico executando inspeção ou reparo
+  AGUARDANDO_PECAS  // Aguardando chegada de componentes ou aprovação adicional
+  FINALIZADA        // Serviço concluído e entregue
+  CANCELADA         // OS cancelada ou reprovada sem execução
+}
+
+enum ServiceOrderPriority {
+  BAIXA
+  NORMAL
+  ALTA
+  CRITICA
+}
+
+enum PhotoStage {
+  IDENTIFICACAO // Placa de patrimônio, número de série, etiqueta QR
+  ANTES         // Estado físico do equipamento antes da intervenção
+  DURANTE       // Procedimento interno, troca de peça, medição, limpeza
+  DEPOIS        // Equipamento montado, testado e finalizado
+}
+
+enum BackupType {
+  MANUAL
+  AUTOMATICO_CRON
+  PRE_MIGRACAO
+  PRE_RESTAURACAO
+}
+
+// ============================================================================
+// 1. CONFIGURAÇÕES INSTITUCIONAIS & WHITE-LABEL (Sincronizado com company.ts)
+// ============================================================================
+
+model CompanySettings {
+  id                    Int      @id @default(1)
+  tradeName             String   @default("InTime Technology")
+  legalName             String   @default("In Time Technology e Systems LTDA")
+  cnpj                  String   @default("10.742.889/0001-36")
+  stateRegistration     String?  // Inscrição Estadual
+  municipalRegistration String?  // Inscrição Municipal
+  email                 String   @default("contato@intimetechnology.com.br")
+  phone                 String   @default("(11) 3000-0000")
+  whatsapp              String?  @default("(11) 99999-0000")
+  website               String?  @default("https://intimetechnology.com.br")
+  logoUrl               String   @default("/brand/logo.svg")
+  faviconUrl            String   @default("/brand/favicon.svg")
+
+  // Endereço Sede
+  zipCode               String?
+  street                String?
+  number                String?
+  complement            String?
+  neighborhood          String?
+  city                  String?  @default("São Paulo")
+  state                 String?  @default("SP")
+
+  // Identidade Visual / Paleta de Cores (Customizável pelo Painel)
+  primaryColor          String   @default("#0284C7")
+  primaryHoverColor     String   @default("#0369A1")
+  secondaryColor        String   @default("#0F172A")
+  secondarySurfaceColor String   @default("#1E293B")
+  accentColor           String   @default("#38BDF8")
+
+  // Textos Padrão de OS, Garantia e LGPD nos PDFs
+  defaultWarrantyDays   Int      @default(90)
+  defaultWarrantyTerms  String   @db.Text @default("Garantia legal de 90 (noventa) dias restrita aos serviços executados e peças substituídas, conforme Art. 26, II do Código de Defesa do Consumidor (Lei nº 8.078/1990). A garantia perde a validade em caso de violação do lacre de segurança, mau uso, quedas, umidade ou oscilações elétricas.")
+  lgpdClauseText        String   @db.Text @default("Em conformidade com a Lei Geral de Proteção de Dados (Lei nº 13.709/2018 - LGPD), a In Time Technology e Systems LTDA (CNPJ 10.742.889/0001-36) coleta e armazena dados pessoais, registros fotográficos técnicos e assinaturas digitais exclusivamente para execução do contrato de prestação de serviços, histórico de manutenção de equipamentos e cumprimento de obrigações fiscais e legais.")
+
+  // Configurações de Backup Automático
+  backupCronEnabled     Boolean  @default(true)
+  backupCronSchedule    String   @default("0 3 * * *") // Diariamente às 03:00 AM
+  backupRetentionCount  Int      @default(10)          // Manter os últimos 10 backups
+
+  updatedAt             DateTime @updatedAt
+  updatedById           Int?
+
+  @@map("company_settings")
+}
+
+// ============================================================================
+// 2. MÓDULO DE FUNCIONÁRIOS / EQUIPE TÉCNICA (MapOS: `usuarios`)
+// ============================================================================
+
+model User {
+  /// ID sequencial preservando `idUsuarios` do MapOS legado
+  id                    Int       @id @default(autoincrement())
+  legacyMaposId         Int?      @unique // Referência explícita ao idUsuarios no MapOS
+
+  name                  String    // MapOS: `nome`
+  cpf                   String    @unique // MapOS: `cpf`
+  rg                    String?   // MapOS: `rg`
+  jobTitle              String    @default("Técnico de Suporte") // MapOS: `cargo`
+  professionalRegistry  String?   // CREA / CFT / Registro Técnico Profissional
+  email                 String    @unique // MapOS: `email`
+  passwordHash          String    // Argon2 / Bcrypt hash
+  phone                 String?   // MapOS: `telefone`
+  mobile                String?   // MapOS: `celular`
+  avatarUrl             String?   // Foto de perfil em /app/uploads/avatars
+
+  // Endereço do Colaborador (Compatibilidade com `usuarios` do MapOS)
+  zipCode               String?   // MapOS: `cep`
+  street                String?   // MapOS: `rua`
+  number                String?   // MapOS: `numero`
+  neighborhood          String?   // MapOS: `bairro`
+  city                  String?   // MapOS: `cidade`
+  state                 String?   // MapOS: `estado`
+
+  role                  Role      @default(TECNICO_CAMPO)
+  isActive              Boolean   @default(true) // MapOS: `situacao` (1 = true, 0 = false)
+  signatureImageUrl     String?   // Assinatura padrão salva do técnico (opcional)
+
+  // Controle de Segurança & LGPD
+  lastLoginAt           DateTime?
+  lastLoginIp           String?   // Capturado via CF-Connecting-IP / X-Forwarded-For
+  acceptedTermsVersion  String?   // Ex: "v1.0-2026"
+  acceptedTermsAt       DateTime?
+
+  createdAt             DateTime  @default(now()) // MapOS: `dataCadastro`
+  updatedAt             DateTime  @updatedAt
+
+  // Relacionamentos
+  assignedServiceOrders ServiceOrder[]        @relation("TechnicianOrders")
+  createdServiceOrders  ServiceOrder[]        @relation("CreatedByOrders")
+  equipmentPhotos       EquipmentPhoto[]
+  serviceOrderPhotos    ServiceOrderPhoto[]
+  termsAcceptances      TermsAcceptance[]
+  auditLogs             AuditLog[]
+  createdBackups        BackupRecord[]
+
+  @@index([email])
+  @@index([cpf])
+  @@index([role, isActive])
+  @@map("users")
+}
+
+// ============================================================================
+// 3. MÓDULO DE CLIENTES E UNIDADES (MapOS: `clientes`)
+// ============================================================================
+
+model Customer {
+  /// ID sequencial preservando `idClientes` do MapOS legado
+  id                    Int       @id @default(autoincrement())
+  legacyMaposId         Int?      @unique // Referência explícita ao idClientes no MapOS
+
+  isLegalEntity         Boolean   @default(true) // MapOS: `pessoa_fisica` (0 = PJ/true, 1 = PF/false)
+  name                  String    // MapOS: `nomeCliente` (Razão Social ou Nome Completo)
+  tradeName             String?   // Nome Fantasia (preenchido via BrasilAPI)
+  document              String    // MapOS: `documento` (CPF ou CNPJ formatado/limpo)
+  stateRegistration     String?   // Inscrição Estadual / RG
+  isSupplier            Boolean   @default(false) // MapOS: `fornecedor`
+
+  email                 String?   // MapOS: `email`
+  phone                 String?   // MapOS: `telefone`
+  mobile                String?   // MapOS: `celular`
+  contactPerson         String?   // MapOS: `contato` (Responsável no cliente)
+  contactRole           String?   // Cargo do contato responsável
+
+  // Endereço Principal de Atendimento (ViaCEP / MapOS)
+  zipCode               String?   // MapOS: `cep`
+  street                String?   // MapOS: `rua`
+  number                String?   // MapOS: `numero`
+  complement            String?   // MapOS: `complemento`
+  neighborhood          String?   // MapOS: `bairro`
+  city                  String?   // MapOS: `cidade`
+  state                 String?   // MapOS: `estado`
+
+  notes                 String?   @db.Text
+  isActive              Boolean   @default(true)
+
+  createdAt             DateTime  @default(now()) // MapOS: `dataCadastro`
+  updatedAt             DateTime  @updatedAt
+
+  // Relacionamentos
+  units                 CustomerUnit[]
+  equipments            Equipment[]
+  serviceOrders         ServiceOrder[]
+
+  @@index([document])
+  @@index([name])
+  @@map("customers")
+}
+
+/// Unidades / Filiais / Locais de Atendimento adicionais de um mesmo Cliente
+model CustomerUnit {
+  id                    Int       @id @default(autoincrement())
+  customerId            Int
+  customer              Customer  @relation(fields: [customerId], references: [id], onDelete: Cascade)
+
+  unitName              String    // Ex: "Matriz - Datacenter", "Filial Sul - Recepção"
+  cnpjBranch            String?   // CNPJ da filial (se aplicável)
+  contactPerson         String?
+  phone                 String?
+  zipCode               String?
+  street                String?
+  number                String?
+  complement            String?
+  neighborhood          String?
+  city                  String?
+  state                 String?
+  isActive              Boolean   @default(true)
+
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @updatedAt
+
+  equipments            Equipment[]
+  serviceOrders         ServiceOrder[]
+
+  @@index([customerId])
+  @@map("customer_units")
+}
+
+// ============================================================================
+// 4. MÓDULO DE EQUIPAMENTOS DOS CLIENTES COM FOTOS E QR CODE (NOVO + MIGRAÇÃO)
+// ============================================================================
+
+model Equipment {
+  id                    Int             @id @default(autoincrement())
+  /// Código único imutável para o QR Code da etiqueta (ex: "INTIME-EQ-000142" ou UUID curto)
+  qrCodeToken           String          @unique @default(cuid())
+
+  customerId            Int
+  customer              Customer        @relation(fields: [customerId], references: [id], onDelete: Restrict)
+
+  unitId                Int?
+  unit                  CustomerUnit?   @relation(fields: [unitId], references: [id], onDelete: SetNull)
+
+  name                  String          // Nome/Descrição (Ex: "Servidor Dell PowerEdge T340", "Nobreak APC 3kVA")
+  category              String          @default("Geral") // Servidor, Desktop, Notebook, Rede, Nobreak, Impressora, CFTV, etc.
+  brand                 String?         // Marca (Dell, HP, Lenovo, APC, Cisco, etc.)
+  model                 String?         // Modelo
+  serialNumber          String?         // Número de Série (S/N)
+  assetTag              String?         // Patrimônio / Tag Interna do Cliente (ex: "PAT-00492")
+  physicalLocation      String?         // Localização Física no cliente (ex: "Sala de TI - Rack 02 - U14")
+
+  technicalSpecs        String?         @db.Text // Especificações Técnicas (CPU, RAM, Disco, IP, MAC, Tensões, etc.)
+  accessories           String?         @db.Text // Acessórios permanentes (Fonte, Cabos, Gavetas)
+  notes                 String?         @db.Text // Observações gerais
+
+  status                EquipmentStatus @default(OPERACIONAL)
+  installationDate      DateTime?
+  warrantyExpiresAt     DateTime?
+  lastInspectedAt       DateTime?
+
+  /// Indica se foi gerado automaticamente pela migração do campo `descricaoProduto` do MapOS
+  migratedFromMaposOsId Int?
+
+  createdAt             DateTime        @default(now())
+  updatedAt             DateTime        @updatedAt
+
+  // Relacionamentos
+  photos                EquipmentPhoto[]
+  serviceOrderLinks     ServiceOrderEquipment[]
+
+  @@index([customerId])
+  @@index([qrCodeToken])
+  @@index([serialNumber])
+  @@index([assetTag])
+  @@index([status])
+  @@map("equipments")
+}
+
+/// Galeria Histórica de Fotos do Equipamento (Placa de identificação, instalação, estado físico)
+model EquipmentPhoto {
+  id                    Int       @id @default(autoincrement())
+  equipmentId           Int
+  equipment             Equipment @relation(fields: [equipmentId], references: [id], onDelete: Cascade)
+
+  fileUrl               String    // Caminho relativo a /app/uploads/equipments/... (formato WebP otimizado)
+  fileName              String
+  mimeType              String    @default("image/webp")
+  fileSize              Int       // Tamanho em bytes
+  caption               String?   // Legenda informada pelo técnico
+  /// Acessibilidade WCAG 2.1 AA: Atributo `alt` obrigatório (gerado automaticamente se caption vazio)
+  altText               String
+
+  uploadedById          Int?
+  uploadedBy            User?     @relation(fields: [uploadedById], references: [id], onDelete: SetNull)
+
+  takenAt               DateTime  @default(now())
+  createdAt             DateTime  @default(now())
+
+  @@index([equipmentId])
+  @@map("equipment_photos")
+}
+
+// ============================================================================
+// 5. CATÁLOGO DE SERVIÇOS, PRODUTOS/PEÇAS E TERMOS DE GARANTIA (MapOS Legado)
+// ============================================================================
+
+/// MapOS: `servicos`
+model ServiceCatalog {
+  /// Preserva `idServicos` do MapOS legado
+  id                    Int                 @id @default(autoincrement())
+  legacyMaposId         Int?                @unique
+  name                  String              // MapOS: `nome`
+  description           String?             @db.Text // MapOS: `descricao`
+  standardPrice         Decimal             @default(0.00) @db.Decimal(10, 2) // MapOS: `preco`
+  estimatedMinutes      Int?                @default(60)
+  isActive              Boolean             @default(true)
+
+  createdAt             DateTime            @default(now())
+  updatedAt             DateTime            @updatedAt
+
+  serviceOrderItems     ServiceOrderServiceItem[]
+
+  @@map("service_catalog")
+}
+
+/// MapOS: `produtos` (Peças/Componentes aplicados nas OS)
+model ProductCatalog {
+  /// Preserva `idProdutos` do MapOS legado
+  id                    Int                 @id @default(autoincrement())
+  legacyMaposId         Int?                @unique
+  code                  String?             // MapOS: `codDeBarra`
+  description           String              // MapOS: `descricao`
+  unit                  String              @default("UN") // MapOS: `unidade`
+  purchasePrice         Decimal             @default(0.00) @db.Decimal(10, 2) // MapOS: `precoCompra`
+  salePrice             Decimal             @default(0.00) @db.Decimal(10, 2) // MapOS: `precoVenda`
+  stockQuantity         Int                 @default(0)    // MapOS: `estoque`
+  minStock              Int                 @default(0)    // MapOS: `estoqueMinimo`
+  isActive              Boolean             @default(true)
+
+  createdAt             DateTime            @default(now())
+  updatedAt             DateTime            @updatedAt
+
+  serviceOrderItems     ServiceOrderProductItem[]
+
+  @@map("product_catalog")
+}
+
+/// MapOS: `garantias` (Termos de Garantia cadastrados)
+model WarrantyTemplate {
+  /// Preserva `idGarantias` do MapOS legado
+  id                    Int            @id @default(autoincrement())
+  legacyMaposId         Int?           @unique
+  reference             String         // MapOS: `refGarantia`
+  text                  String         @db.Text // MapOS: `textoGarantia`
+  days                  Int            @default(90)
+  createdById           Int?           // MapOS: `usuarios_id`
+  createdAt             DateTime       @default(now()) // MapOS: `dataGarantia`
+  updatedAt             DateTime       @updatedAt
+
+  serviceOrders         ServiceOrder[]
+
+  @@map("warranty_templates")
+}
+
+// ============================================================================
+// 6. MÓDULO DE ORDENS DE SERVIÇO (OS) E LAUDO TÉCNICO (MapOS: `os`)
+// ============================================================================
+
+model ServiceOrder {
+  /// CRÍTICO: Preserva exatamente o `idOs` original do MapOS!
+  /// Após a migração, a sequence do PostgreSQL é ajustada para MAX(id) + 1.
+  id                    Int                  @id @default(autoincrement())
+  legacyMaposId         Int?                 @unique // Espelho de auditoria do idOs original
+
+  /// Token público de verificação autenticada (QR Code no PDF do Laudo)
+  verificationToken     String               @unique @default(cuid())
+
+  customerId            Int                  // MapOS: `clientes_id`
+  customer              Customer             @relation(fields: [customerId], references: [id], onDelete: Restrict)
+
+  unitId                Int?
+  unit                  CustomerUnit?        @relation(fields: [unitId], references: [id], onDelete: SetNull)
+
+  technicianId          Int                  // MapOS: `usuarios_id` (Técnico Responsável)
+  technician            User                 @relation("TechnicianOrders", fields: [technicianId], references: [id], onDelete: Restrict)
+
+  createdById           Int?
+  createdBy             User?                @relation("CreatedByOrders", fields: [createdById], references: [id], onDelete: SetNull)
+
+  status                ServiceOrderStatus   @default(ABERTA) // MapOS: `status`
+  priority              ServiceOrderPriority @default(NORMAL)
+
+  // Datas do Atendimento
+  startDate             DateTime             @default(now()) // MapOS: `dataInicial`
+  endDate               DateTime?            // MapOS: `dataFinal`
+  scheduledFor          DateTime?            // Data/Hora agendada para visita técnica
+
+  // Garantia
+  warrantyDays          Int?                 @default(90) // MapOS: `garantia` (convertido/preservado)
+  warrantyTextLegacy    String?              // Caso no MapOS o campo `garantia` contenha texto livre ex: "90 dias"
+  warrantyTemplateId    Int?                 // MapOS: `garantias_id`
+  warrantyTemplate      WarrantyTemplate?    @relation(fields: [warrantyTemplateId], references: [id], onDelete: SetNull)
+
+  // Campos Técnicos e de Laudo (Compatíveis com MapOS + Expansão Profissional InTime)
+  legacyProductDesc     String?              @db.Text // MapOS: `descricaoProduto` (Texto original preservado)
+  reportedDefect        String               @db.Text // MapOS: `defeito` (Defeito / Solicitação relatada)
+  technicalDiagnosis    String?              @db.Text // Diagnóstico / Inspeção Técnica detalhada
+  technicalReport       String?              @db.Text // MapOS: `laudoTecnico` (Serviços e Procedimentos realizados)
+  recommendations       String?              @db.Text // Recomendações Técnicas preventivas/corretivas ao cliente
+  observations          String?              @db.Text // MapOS: `observacoes`
+  internalNotes         String?              @db.Text // Anotações internas (não saem no PDF do cliente)
+
+  // Valores Financeiros da OS
+  servicesTotal         Decimal              @default(0.00) @db.Decimal(10, 2)
+  productsTotal         Decimal              @default(0.00) @db.Decimal(10, 2)
+  discountAmount        Decimal              @default(0.00) @db.Decimal(10, 2) // MapOS: `desconto`
+  totalAmount           Decimal              @default(0.00) @db.Decimal(10, 2) // MapOS: `valorTotal`
+  isBilled              Boolean              @default(false) // MapOS: `faturado`
+
+  // Assinaturas Digitais (Touch Canvas no App Android / Web)
+  technicianSignatureUrl String?             // Imagem PNG/WebP da assinatura do técnico na OS
+  technicianSignedAt     DateTime?
+  customerSignatureUrl   String?             // Imagem PNG/WebP da assinatura do cliente na tela
+  customerSignerName     String?             // Nome legível de quem recebeu/assinou no cliente
+  customerSignerDoc      String?             // CPF/RG de quem assinou no cliente
+  customerSignedAt       DateTime?
+  customerSignedIp       String?             // IP real (CF-Connecting-IP) no momento da assinatura
+
+  createdAt             DateTime             @default(now())
+  updatedAt             DateTime             @updatedAt
+
+  // Relacionamentos
+  equipments            ServiceOrderEquipment[]
+  serviceItems          ServiceOrderServiceItem[]
+  productItems          ServiceOrderProductItem[]
+  photos                ServiceOrderPhoto[]
+  attachments           ServiceOrderAttachment[]
+  comments              ServiceOrderComment[]
+
+  @@index([customerId])
+  @@index([technicianId])
+  @@index([status])
+  @@index([startDate])
+  @@map("service_orders")
+}
+
+/// Vínculo N:N entre Ordem de Serviço e 1 ou mais Equipamentos do Cliente
+/// Permite também registrar o diagnóstico individual por equipamento dentro da mesma OS
+model ServiceOrderEquipment {
+  id                    Int          @id @default(autoincrement())
+  serviceOrderId        Int
+  serviceOrder          ServiceOrder @relation(fields: [serviceOrderId], references: [id], onDelete: Cascade)
+
+  equipmentId           Int
+  equipment             Equipment    @relation(fields: [equipmentId], references: [id], onDelete: Restrict)
+
+  specificDefect        String?      @db.Text // Defeito específico deste equipamento na OS
+  specificDiagnosis     String?      @db.Text // Diagnóstico específico deste equipamento
+  specificProcedures    String?      @db.Text // Procedimento executado neste equipamento
+  conditionOnArrival    String?      // Estado físico na chegada / inspeção inicial
+  statusAfterService    EquipmentStatus @default(OPERACIONAL)
+
+  createdAt             DateTime     @default(now())
+
+  @@unique([serviceOrderId, equipmentId])
+  @@index([equipmentId])
+  @@map("service_order_equipments")
+}
+
+/// MapOS: `servicos_os` (Serviços executados na OS)
+model ServiceOrderServiceItem {
+  /// Preserva `idServicos_os` do MapOS legado
+  id                    Int             @id @default(autoincrement())
+  legacyMaposId         Int?            @unique
+
+  serviceOrderId        Int             // MapOS: `os_id`
+  serviceOrder          ServiceOrder    @relation(fields: [serviceOrderId], references: [id], onDelete: Cascade)
+
+  serviceCatalogId      Int?            // MapOS: `servicos_id`
+  serviceCatalog        ServiceCatalog? @relation(fields: [serviceCatalogId], references: [id], onDelete: SetNull)
+
+  description           String          // MapOS: `servico` (Nome/descrição customizada na OS)
+  quantity              Decimal         @default(1.00) @db.Decimal(10, 2) // MapOS: `quantidade`
+  unitPrice             Decimal         @default(0.00) @db.Decimal(10, 2) // MapOS: `preco`
+  subtotal              Decimal         @default(0.00) @db.Decimal(10, 2) // MapOS: `subTotal`
+
+  createdAt             DateTime        @default(now())
+
+  @@index([serviceOrderId])
+  @@map("service_order_service_items")
+}
+
+/// MapOS: `produtos_os` (Peças/Produtos utilizados na OS)
+model ServiceOrderProductItem {
+  /// Preserva `idProdutos_os` do MapOS legado
+  id                    Int             @id @default(autoincrement())
+  legacyMaposId         Int?            @unique
+
+  serviceOrderId        Int             // MapOS: `os_id`
+  serviceOrder          ServiceOrder    @relation(fields: [serviceOrderId], references: [id], onDelete: Cascade)
+
+  productCatalogId      Int?            // MapOS: `produtos_id`
+  productCatalog        ProductCatalog? @relation(fields: [productCatalogId], references: [id], onDelete: SetNull)
+
+  description           String          // MapOS: `descricao`
+  quantity              Decimal         @default(1.00) @db.Decimal(10, 2) // MapOS: `quantidade`
+  unitPrice             Decimal         @default(0.00) @db.Decimal(10, 2) // MapOS: `preco`
+  subtotal              Decimal         @default(0.00) @db.Decimal(10, 2) // MapOS: `subTotal`
+
+  createdAt             DateTime        @default(now())
+
+  @@index([serviceOrderId])
+  @@map("service_order_product_items")
+}
+
+/// Fotos Técnicas do Atendimento / Laudo (Antes / Durante / Depois)
+model ServiceOrderPhoto {
+  id                    Int          @id @default(autoincrement())
+  serviceOrderId        Int
+  serviceOrder          ServiceOrder @relation(fields: [serviceOrderId], references: [id], onDelete: Cascade)
+
+  equipmentId           Int?         // Opcional: vincula a foto diretamente a um equipamento da OS
+  stage                 PhotoStage   @default(DURANTE) // IDENTIFICACAO, ANTES, DURANTE, DEPOIS
+
+  fileUrl               String       // Caminho em /app/uploads/os/... (WebP comprimido)
+  fileName              String
+  mimeType              String       @default("image/webp")
+  fileSize              Int
+  caption               String?      // Legenda técnica exibida abaixo da foto no PDF do Laudo
+  /// Acessibilidade WCAG 2.1 AA: Atributo `alt` descritivo obrigatório
+  altText               String
+
+  uploadedById          Int?
+  uploadedBy            User?        @relation(fields: [uploadedById], references: [id], onDelete: SetNull)
+
+  takenAt               DateTime     @default(now())
+  createdAt             DateTime     @default(now())
+
+  @@index([serviceOrderId])
+  @@map("service_order_photos")
+}
+
+/// MapOS: `anexos` (Arquivos e anexos legados e novos vinculados à OS)
+model ServiceOrderAttachment {
+  /// Preserva `idAnexos` do MapOS legado
+  id                    Int          @id @default(autoincrement())
+  legacyMaposId         Int?         @unique
+
+  serviceOrderId        Int          // MapOS: `os_id`
+  serviceOrder          ServiceOrder @relation(fields: [serviceOrderId], references: [id], onDelete: Cascade)
+
+  attachmentName        String       // MapOS: `anexo`
+  thumbUrl              String?      // MapOS: `thumb`
+  fileUrl               String       // MapOS: `url` / `path` (Movido para /app/uploads/attachments/...)
+  mimeType              String?
+  fileSize              Int?
+
+  createdAt             DateTime     @default(now())
+
+  @@index([serviceOrderId])
+  @@map("service_order_attachments")
+}
+
+/// MapOS: `anotacoes_os` (Histórico de anotações e interações na OS)
+model ServiceOrderComment {
+  /// Preserva `idAnotacoes` do MapOS legado
+  id                    Int          @id @default(autoincrement())
+  legacyMaposId         Int?         @unique
+
+  serviceOrderId        Int          // MapOS: `os_id`
+  serviceOrder          ServiceOrder @relation(fields: [serviceOrderId], references: [id], onDelete: Cascade)
+
+  note                  String       @db.Text // MapOS: `anotacao`
+  authorName            String?
+
+  createdAt             DateTime     @default(now()) // MapOS: `data_hora`
+
+  @@index([serviceOrderId])
+  @@map("service_order_comments")
+}
+
+// ============================================================================
+// 7. LGPD, TERMOS DE CONFIDENCIALIDADE, AUDITORIA E BACKUPS
+// ============================================================================
+
+/// Registro de Aceite Obrigatório do Termo de Confidencialidade e Uso Ético (LGPD)
+model TermsAcceptance {
+  id                    Int      @id @default(autoincrement())
+  userId                Int
+  user                  User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  termsVersion          String   // Ex: "v1.0-LGPD-2026"
+  termsHash             String   // Hash SHA-256 do texto assinado para validade jurídica
+  ipAddress             String   // Capturado via CF-Connecting-IP / X-Forwarded-For
+  userAgent             String?
+  acceptedAt            DateTime @default(now())
+
+  @@index([userId, termsVersion])
+  @@map("terms_acceptances")
+}
+
+/// Trilha de Auditoria Completa (LGPD Art. 37 - Registro de Operações de Tratamento)
+model AuditLog {
+  id                    Int      @id @default(autoincrement())
+  userId                Int?
+  user                  User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  action                String   // Ex: "CREATE_OS", "EXPORT_PDF", "RESTORE_BACKUP", "MIGRATE_MAPOS", "LOGIN"
+  entity                String   // Ex: "ServiceOrder", "Customer", "Equipment", "Backup", "Database"
+  entityId              String?  // ID do registro afetado
+  details               Json?    // Metadados da alteração (antes/depois sanitizado)
+  ipAddress             String   // IP real via Cloudflare Tunnel (CF-Connecting-IP)
+  userAgent             String?
+
+  createdAt             DateTime @default(now())
+
+  @@index([userId])
+  @@index([entity, entityId])
+  @@index([createdAt])
+  @@map("audit_logs")
+}
+
+/// Histórico de Backups Gerados em `/app/backups`
+model BackupRecord {
+  id                    Int        @id @default(autoincrement())
+  fileName              String     @unique // Ex: "intime-backup-2026-10-24T03-00-00Z.zip"
+  filePath              String     // Ex: "/app/backups/intime-backup-2026-10-24T03-00-00Z.zip"
+  fileSize              BigInt     // Tamanho total em bytes
+  sha256Hash            String     // Hash SHA-256 de integridade do arquivo .zip
+  type                  BackupType @default(MANUAL)
+  includesUploads       Boolean    @default(true)
+  recordsSummary        Json?      // Quantidade de clientes, OS, equipamentos e fotos no pacote
+  notes                 String?
+
+  createdById           Int?
+  createdBy             User?      @relation(fields: [createdById], references: [id], onDelete: SetNull)
+  createdAt             DateTime   @default(now())
+
+  @@index([createdAt])
+  @@map("backup_records")
+}

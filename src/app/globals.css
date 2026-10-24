@@ -1,0 +1,45 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --background: 210 40% 98%;
+    --foreground: 222.2 84% 4.9%;
+    --card: 0 0% 100%;
+    --card-foreground: 222.2 84% 4.9%;
+    --border: 214.3 31.8% 91.4%;
+    --input: 214.3 31.8% 91.4%;
+    --ring: 199 98% 39%;
+  }
+
+  .dark {
+    --background: 222.2 47.4% 11.2%; /* #0F172A Deep Tech Navy */
+    --foreground: 210 40% 98%;
+    --card: 217.2 32.6% 17.5%;       /* #1E293B Slate Tech Surface */
+    --card-foreground: 210 40% 98%;
+    --border: 217.2 32.6% 24%;
+    --input: 217.2 32.6% 22%;
+    --ring: 199 95% 60%;             /* #38BDF8 Electric Cyan */
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+  body {
+    @apply bg-background text-foreground antialiased selection:bg-[#0284C7] selection:text-white;
+  }
+  /* Foco visível acessível WCAG 2.1 AA */
+  :focus-visible {
+    @apply outline-2 outline-offset-2 outline-[#0284C7] dark:outline-[#38BDF8];
+  }
+}
+
+/* Regras para impressão limpa de Etiquetas QR Code */
+@media print {
+  .no-print {
+    display: none !important;
+  }
+}

@@ -1,0 +1,35 @@
+# Dependencies
+/node_modules
+/.pnp
+.pnp.js
+
+# Next.js build output
+/.next/
+/out/
+/dist-apk/
+
+# Production & Local Volumes
+/uploads/
+/backups/
+
+# Environment Variables (Secret Protection)
+.env
+.env*.local
+
+# Logs & Debug
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# TypeScript & System
+*.tsbuildinfo
+next-env.d.ts
+.DS_Store
+Thumbs.db
+
+# Android Keystores & Local Build Artifacts
+*.keystore
+*.jks
+android/app/build/
+android/.gradle/
+android/local.properties

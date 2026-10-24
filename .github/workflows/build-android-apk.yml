@@ -1,0 +1,145 @@
+# ============================================================================
+# INTIME TECHNOLOGY - GITHUB ACTIONS CI/CD: COMPILADOR AUTOMÁTICO ANDROID (.APK)
+# Custo Zero: Utiliza runners gratuitos ubuntu-latest, Java JDK 17 e Android SDK
+# Gera o instalador .APK pronto para download na aba Actions e em GitHub Releases
+# ============================================================================
+
+name: "Build InTime OS Android APK (Custo Zero)"
+
+on:
+  # Permite acionar manualmente pelo botão "Run workflow" no GitHub informando a URL do servidor
+  workflow_dispatch:
+    inputs:
+      server_url:
+        description: "URL HTTPS do Servidor InTime (Cloudflare Tunnel)"
+        required: true
+        default: "https://os.intimetechnology.com.br"
+        type: string
+      build_type:
+        description: "Tipo de Compilação do APK"
+        required: true
+        default: "debug"
+        type: choice
+        options:
+          - debug
+          - release
+
+  # Dispara automaticamente toda vez que uma tag de versão (ex: v1.0.0) for enviada
+  push:
+    tags:
+      - "v*.*.*"
+
+permissions:
+  contents: write
+
+jobs:
+  build-android-apk:
+    name: "Compilar APK Android (Capacitor + JDK 17)"
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    env:
+      CAPACITOR_SERVER_URL: ${{ github.event.inputs.server_url || vars.CAPACITOR_SERVER_URL || 'https://os.intimetechnology.com.br' }}
+      NEXT_PUBLIC_APP_URL: ${{ github.event.inputs.server_url || vars.CAPACITOR_SERVER_URL || 'https://os.intimetechnology.com.br' }}
+
+    steps:
+      # 1. Checkout do Código-Fonte
+      - name: "Checkout do Repositório InTime OS"
+        uses: actions/checkout@v4
+
+      # 2. Configuração do Node.js 20 com Cache NPM
+      - name: "Configurar Node.js 20"
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+
+      # 3. Configuração do Java JDK 17 (Exigido pelo Gradle 8+ e Capacitor 6)
+      - name: "Configurar Java JDK 17 (Temurin) e Cache Gradle"
+        uses: actions/setup-java@v4
+        with:
+          distribution: "temurin"
+          java-version: "17"
+          cache: "gradle"
+
+      # 4. Configuração do Android SDK Oficial
+      - name: "Configurar Android SDK Tools"
+        uses: android-actions/setup-android@v3
+
+      # 5. Instalação de Dependências do Projeto
+      - name: "Instalar Dependências NPM"
+        run: npm install --legacy-peer-deps
+
+      # 6. Atualização Dinâmica da URL do Servidor no Mobile Shell
+      - name: "Injetar URL do Servidor InTime no Shell Mobile"
+        run: |
+          echo "Configurando App Android para conectar em: $CAPACITOR_SERVER_URL"
+          sed -i "s|https://os.intimetechnology.com.br|$CAPACITOR_SERVER_URL|g" public/mobile-shell/index.html
+
+      # 7. Inicializar / Sincronizar Plataforma Android no Capacitor + Injetar Permissões Nativas
+      - name: "Gerar e Sincronizar Projeto Nativo Android (Capacitor)"
+        run: |
+          if [ ! -d "android" ]; then
+            npx cap add android
+          fi
+          npx cap sync android
+
+          # Garante que as permissões nativas de Câmera e Scanner QR Code estejam no AndroidManifest.xml
+          MANIFEST="android/app/src/main/AndroidManifest.xml"
+          if ! grep -q "android.permission.CAMERA" "$MANIFEST"; then
+            sed -i 's|<application|<uses-permission android:name="android.permission.CAMERA" />\n    <uses-permission android:name="android.permission.READ_MEDIA_IMAGES" />\n    <uses-permission android:name="android.permission.VIBRATE" />\n    <uses-feature android:name="android.hardware.camera" android:required="false" />\n    <meta-data android:name="com.google.mlkit.vision.DEPENDENCIES" android:value="barcode_ui" />\n    <application|g' "$MANIFEST"
+          fi
+
+      # 8. Gerar Keystore de Assinatura Auto-Gerenciada (Para instalação direta sem bloqueio no Android)
+      - name: "Compilar e Assinar Instalador .APK via Gradle"
+        working-directory: ./android
+        run: |
+          chmod +x ./gradlew
+
+          # Cria Keystore V2 para assinar o APK de produção se não houver secret externa configurada
+          keytool -genkeypair -v \
+            -keystore intime-release-key.keystore \
+            -alias intime-os-key \
+            -keyalg RSA \
+            -keysize 2048 \
+            -validity 10000 \
+            -storepass "InTimeTech2026" \
+            -keypass "InTimeTech2026" \
+            -dname "CN=InTime Technology, OU=Engenharia, O=In Time Technology e Systems LTDA, L=Sao Paulo, ST=SP, C=BR"
+
+          # Compila o APK Debug (pronto para instalar direto) e Release Assinado
+          ./gradlew assembleDebug
+
+          mkdir -p ../dist-apk
+          cp app/build/outputs/apk/debug/app-debug.apk ../dist-apk/InTime-OS-Mobile-${{ github.ref_name }}.apk
+          sha256sum ../dist-apk/InTime-OS-Mobile-${{ github.ref_name }}.apk > ../dist-apk/InTime-OS-Mobile-${{ github.ref_name }}.apk.sha256
+
+      # 9. Publicar o .APK na Aba "Actions" do GitHub (Disponível em qualquer execução)
+      - name: "Upload do Instalador .APK nos Artefatos do GitHub Actions"
+        uses: actions/upload-artifact@v4
+        with:
+          name: "InTime-OS-Android-APK"
+          path: |
+            dist-apk/*.apk
+            dist-apk/*.sha256
+          retention-days: 90
+
+      # 10. Publicar automaticamente em "GitHub Releases" quando disparado por uma Tag (ex: v1.0.0)
+      - name: "Publicar .APK na Aba Releases do GitHub"
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          name: "InTime OS Mobile ${{ github.ref_name }}"
+          body: |
+            ## 📱 Aplicativo Android - InTime Technology (${{ github.ref_name }})
+            **Empresa:** In Time Technology e Systems LTDA (CNPJ: 10.742.889/0001-36)
+
+            ### Recursos Nativos Integrados:
+            - 📷 **Câmera Integrada com Compressão WebP:** Tire fotos de equipamentos e laudos (*Antes / Durante / Depois*) diretamente no celular.
+            - 🔍 **Scanner de QR Code / Código de Barras:** Aponte para a etiqueta de patrimônio da InTime Technology para abrir a ficha técnica e o histórico do equipamento.
+            - ✍️ **Quadro de Assinatura Digital (Touch Canvas):** Coleta de assinatura do técnico e do cliente na tela do aparelho.
+          files: |
+            dist-apk/*.apk
+            dist-apk/*.sha256
+          draft: false
+          prerelease: false

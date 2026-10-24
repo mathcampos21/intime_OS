@@ -1,0 +1,98 @@
+# ============================================================================
+# INTIME TECHNOLOGY - PORTAINER STACK (DOCKER COMPOSE)
+# Ambiente: Proxmox VE -> Container LXC -> Docker -> Portainer
+# Porta Externa: 3080:3000 (Não conflita com o MapOS antigo durante a transição)
+# ============================================================================
+
+services:
+  # --------------------------------------------------------------------------
+  # 1. Banco de Dados Relacional (PostgreSQL 16 Alpine)
+  # --------------------------------------------------------------------------
+  intime_db:
+    image: postgres:16-alpine
+    container_name: intime_postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-intime_admin}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-InTime@SecureDB2026!}
+      POSTGRES_DB: ${POSTGRES_DB:-intime_os_db}
+      TZ: America/Sao_Paulo
+      PGTZ: America/Sao_Paulo
+    # Tuning leve para Container LXC (baixo consumo de RAM e alta velocidade de I/O)
+    command: >
+      postgres
+      -c shared_buffers=128MB
+      -c effective_cache_size=256MB
+      -c work_mem=4MB
+      -c maintenance_work_mem=32MB
+      -c max_connections=50
+    volumes:
+      - intime_pgdata:/var/lib/postgresql/data
+    networks:
+      - intime_internal_net
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-intime_admin} -d ${POSTGRES_DB:-intime_os_db}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  # --------------------------------------------------------------------------
+  # 2. Aplicação Web + API RESTful Mobile + Motor de Backup (Next.js Standalone)
+  # --------------------------------------------------------------------------
+  intime_app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: intimetechnology/intime-os-platform:latest
+    container_name: intime_os_app
+    restart: unless-stopped
+    depends_on:
+      intime_db:
+        condition: service_healthy
+    ports:
+      # Porta 3080 externa mapeada para 3000 interna (coexistência pacífica com MapOS legado)
+      - "3080:3000"
+    environment:
+      NODE_ENV: production
+      TZ: America/Sao_Paulo
+      PORT: 3000
+      # Conexão com o PostgreSQL
+      DATABASE_URL: postgresql://${POSTGRES_USER:-intime_admin}:${POSTGRES_PASSWORD:-InTime@SecureDB2026!}@intime_db:5432/${POSTGRES_DB:-intime_os_db}?schema=public
+      # Chave criptográfica para Tokens JWT (Web Cookies HTTP-Only + App Android Bearer)
+      JWT_SECRET: ${JWT_SECRET:-intime-tech-super-secret-jwt-key-change-in-portainer-2026}
+      # URL Pública exposta pelo Cloudflare Tunnel (usada nos QR Codes de Etiquetas e Laudos)
+      NEXT_PUBLIC_APP_URL: ${NEXT_PUBLIC_APP_URL:-https://os.intimetechnology.com.br}
+      # Diretórios montados nos volumes persistentes
+      UPLOADS_DIR: /app/uploads
+      BACKUPS_DIR: /app/backups
+      # Credenciais iniciais do Administrador criadas automaticamente no primeiro boot
+      INITIAL_ADMIN_EMAIL: ${INITIAL_ADMIN_EMAIL:-admin@intimetechnology.com.br}
+      INITIAL_ADMIN_PASSWORD: ${INITIAL_ADMIN_PASSWORD:-InTime@Admin2026}
+      # Confiança em Proxy Reverso Cloudflare Tunnel (CF-Connecting-IP / X-Forwarded-For)
+      TRUST_CLOUDFLARE_PROXY: "true"
+    volumes:
+      # Volume persistente para fotos de equipamentos (WebP), assinaturas digitais e anexos migrados
+      - intime_uploads:/app/uploads
+      # Volume persistente para pacotes .zip de Backup Automático (Cron) e Manual
+      - intime_backups:/app/backups
+    networks:
+      - intime_internal_net
+
+# ============================================================================
+# VOLUMES NOMEADOS PERSISTENTES (GERENCIADOS PELO PORTAINER)
+# ============================================================================
+volumes:
+  intime_pgdata:
+    driver: local
+  intime_uploads:
+    driver: local
+  intime_backups:
+    driver: local
+
+# ============================================================================
+# REDE ISOLADA DA STACK
+# ============================================================================
+networks:
+  intime_internal_net:
+    driver: bridge
